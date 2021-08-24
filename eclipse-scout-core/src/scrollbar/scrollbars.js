@@ -20,6 +20,7 @@ import $ from 'jquery';
  */
 
 let _$scrollables = {};
+let mutationObserver;
 
 export function getScrollables(session) {
   // return scrollables for given session
@@ -67,15 +68,20 @@ export function removeScrollable(session, $container) {
  * @param {string} [options.axis] x, y or both. Default is both.
  * @param {boolean} [options.nativeScrollbars]
  * @param {boolean} [options.hybridScrollbars]
- * @param {boolean} [options.scrollShadow]
- * @param {string} [options.scrollShadowSize] large for a larger shadow or undefined for the default size
+ * @param {string|[string]} [options.scrollShadow] controls the scroll shadow behavior.
+ *        <ul>
+ *          <li>To define where the shadow should appear, use one of the following values: x, y, top, right, bottom, left. Multiple values can be separated by space.
+ *          <li>If no positioning value is provided, it is automatically determined based on the axis.</li>
+ *          <li>To adjust the style, add one of the following values: large or gradient.</li>
+ *          <li>To disable the scroll shadow completely, set the value to none.</li>
+ *        </ul>
  * @param {Session} [options.session]
  * @param {Widget} [options.parent]
  */
 export function install($container, options) {
   options = _createDefaultScrollToOptions(options);
   options.axis = options.axis || 'both';
-  options.scrollShadow = options.scrollShadow || 'all';
+  options.scrollShadow = options.scrollShadow || 'auto';
 
   // Don't use native as variable name because it will break minifying (reserved keyword)
   let nativeScrollbars = scout.nvl(options.nativeScrollbars, Device.get().hasPrettyScrollbars());
@@ -99,15 +105,11 @@ export function install($container, options) {
     htmlContainer.scrollable = true;
   }
   $container.data('scrollable', true);
-  // if (options.scrollShadow) {
-  let $shadow = $container.afterDiv('scroll-shadow');
-  $shadow.toggleClass('large', options.scrollShadowSize === 'large');
-  $container.data('scroll-shadow', $shadow);
-  $shadow.data('scroll-shadow-parent', $container);
-  $container.on('scroll', () => updateScrollShadows($container));
-  // }
   let session = options.session || options.parent.session;
   pushScrollable(session, $container);
+  if (options.scrollShadow) {
+    installScrollShadow($container, session, options);
+  }
   return $container;
 }
 
@@ -137,19 +139,89 @@ export function _installNativeInternal($container, options) {
   $container.css('-webkit-overflow-scrolling', 'touch');
 }
 
-export function updateScrollShadows($container) {
+function installScrollShadow($container, session, options) {
+  let scrollShadowStyle = _computeScrollShadowStyle(options);
+  if (scrollShadowStyle.length === 0) {
+    return;
+  }
+  let $shadow = $container.afterDiv('scroll-shadow');
+  $shadow.toggleClass('large', scrollShadowStyle.indexOf('large') > -1);
+  $shadow.toggleClass('gradient', scrollShadowStyle.indexOf('gradient') > -1);
+  $shadow.data('scroll-shadow-parent', $container);
+  $container.data('scroll-shadow', $shadow);
+  $container.data('scroll-shadow-style', scrollShadowStyle);
+  $container.on('scroll', () => updateScrollShadow($container));
+  updateScrollShadow($container);
+  if (!mutationObserver) {
+    _installMutationObserver(session);
+  }
+}
+
+function uninstallScrollShadow($container, session) {
+  let $shadow = $container.data('scroll-shadow');
+  if ($shadow) {
+    $shadow.remove();
+  }
+  let $scrollables = _$scrollables[session];
+  if (!$scrollables || !$scrollables.some($scrollable => $scrollable.data('scroll-shadow'))) {
+    _uninstallMutationObserver();
+  }
+}
+
+/**
+ * @param options
+ * @return {[string]}
+ */
+function _computeScrollShadowStyle(options) {
+  let scrollShadow = options.scrollShadow;
+  if (!scrollShadow) {
+    return [];
+  }
+  if (typeof scrollShadow === 'string') {
+    scrollShadow = scrollShadow.split(' ');
+  }
+  scrollShadow = scrollShadow.slice(); // copy to don't modify parameter
+  if (scrollShadow.indexOf('none') > -1) {
+    return [];
+  }
+  if (!arrays.containsAny(scrollShadow, ['y', 'x', 'top', 'right', 'bottom', 'left'])) {
+    // If no position was set, determine it automatically based on the axis
+    if (options.axis === 'both' || options.axis === 'y') {
+      scrollShadow.push('y');
+    }
+    if (options.axis === 'both' || options.axis === 'x') {
+      scrollShadow.push('x');
+    }
+  }
+  if (scrollShadow.indexOf('y') > -1) {
+    scrollShadow.push('top');
+    scrollShadow.push('bottom');
+  }
+  if (scrollShadow.indexOf('x') > -1) {
+    scrollShadow.push('left');
+    scrollShadow.push('right');
+  }
+  arrays.removeAll(scrollShadow, ['all', 'y', 'x', 'auto', 'none']);
+  return scrollShadow;
+}
+
+export function updateScrollShadow($container) {
+  let $shadow = $container.data('scroll-shadow');
+  if (!$shadow) {
+    return;
+  }
   let scrollTop = $container[0].scrollTop;
   let scrollLeft = $container[0].scrollLeft;
   let atTop = atStart(scrollTop);
   let atBottom = atEnd(scrollTop, $container[0].scrollHeight, $container[0].offsetHeight);
   let atLeft = atStart(scrollLeft);
   let atRight = atEnd(scrollLeft, $container[0].scrollWidth, $container[0].offsetWidth);
-  let $shadow = $container.data('scroll-shadow');
-  $shadow.toggleClass('scroll-shadow-top', !atTop);
-  $shadow.toggleClass('scroll-shadow-bottom', !atBottom);
-  $shadow.toggleClass('scroll-shadow-left', !atLeft);
-  $shadow.toggleClass('scroll-shadow-right', !atRight);
-  graphics.setBounds($shadow, graphics.bounds($container));
+  let style = $container.data('scroll-shadow-style');
+  $shadow.toggleClass('top', !atTop && style.indexOf('top') > -1);
+  $shadow.toggleClass('bottom', !atBottom && style.indexOf('bottom') > -1);
+  $shadow.toggleClass('left', !atLeft && style.indexOf('left') > -1);
+  $shadow.toggleClass('right', !atRight && style.indexOf('right') > -1);
+  graphics.setBounds($shadow, graphics.bounds($container, {exact: true}));
   graphics.setMargins($shadow, graphics.margins($container));
   $shadow.css('border-radius', $container.css('border-radius'));
 
@@ -160,6 +232,58 @@ export function updateScrollShadows($container) {
   function atEnd(scrollPos, scrollSize, offsetSize) {
     return scrollPos + 1 >= scrollSize - offsetSize;
   }
+}
+
+function _installMutationObserver(session) {
+  if (mutationObserver) {
+    return;
+  }
+  mutationObserver = new MutationObserver(_onDomMutation);
+  mutationObserver.observe(session.desktop.$container[0], {
+    subtree: true,
+    childList: true
+  });
+}
+
+function _onDomMutation(mutationList, observer) {
+  mutationList.forEach(_processDomMutation);
+}
+
+function _processDomMutation(mutation) {
+  // addedNodes if of type NodeList and therefore does not support array functions
+  for (let i = 0; i < mutation.addedNodes.length; i++) {
+    let elem = mutation.addedNodes[i];
+    let $elem = $(elem);
+    if ($elem.data('scrollable')) {
+      // Move scroll shadow after scrollable when scrollable was moved (=inserted again)
+      let $scrollShadow = $elem.data('scroll-shadow');
+      if ($scrollShadow) {
+        $scrollShadow.insertAfter($elem);
+      }
+    }
+  }
+}
+
+function _uninstallMutationObserver() {
+  if (!mutationObserver) {
+    return;
+  }
+  mutationObserver.disconnect();
+  mutationObserver = null;
+}
+
+export function hasScrollShadow($container, position) {
+  if (!$container) {
+    return false;
+  }
+  let $scrollShadow = $container.data('scroll-shadow');
+  if (!$scrollShadow) {
+    return false;
+  }
+  if (!position) {
+    return true;
+  }
+  return $scrollShadow.hasClass(position);
 }
 
 export function isHybridScrolling($scrollable) {
@@ -213,11 +337,6 @@ export function uninstall($container, session) {
     return;
   }
 
-  let $shadow = $container.data('scroll-shadow');
-  if ($shadow) {
-    $shadow.remove();
-  }
-
   let scrollbars = $container.data('scrollbars');
   if (scrollbars) {
     scrollbars.forEach(scrollbar => {
@@ -234,6 +353,7 @@ export function uninstall($container, session) {
   if (htmlContainer) {
     htmlContainer.scrollable = false;
   }
+  uninstallScrollShadow($container, session);
 }
 
 /**
@@ -246,7 +366,7 @@ export function update($scrollable, immediate) {
   if (!$scrollable || !$scrollable.data('scrollable')) {
     return;
   }
-  updateScrollShadows($scrollable);
+  updateScrollShadow($scrollable);
   let scrollbars = $scrollable.data('scrollbars');
   if (!scrollbars) {
     if (Device.get().isIos()) {
@@ -771,6 +891,7 @@ export default {
   isJsScrolling,
   isLocationInView,
   isNativeScrolling,
+  hasScrollShadow,
   offScroll,
   onScroll,
   opacity,
