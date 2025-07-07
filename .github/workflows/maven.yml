@@ -1,0 +1,43 @@
+# This workflow will build a Java project with Maven, and cache/restore any dependencies to improve the workflow execution time
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-maven
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+name: Java CI with Maven
+
+on:
+  push:
+    branches: [ "releases/11.0" ]
+  pull_request:
+    branches: [ "releases/11.0" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run build inside container
+      uses: addnab/docker-run-action@v3
+      with:
+        image: bsisoftware/scout-maven-chrome:${{ steps.image_version.outputs.imageVersion }}
+        options: --pull
+        run: |
+          cat <<'EOF'
+          mvn -f org.eclipse.scout.rt/pom.xml clean verify -U -B -e -Dmaster_enforcerCheck_skip=true -Dmaster_node_dir=${NODE_HOME}/bin -Dscout.excludeTestCategories=org.eclipse.scout.rt.testing.platform.testcategory.ResourceIntensiveTest
+          EOF
+
+    - name: Cleanup node_modules directories
+      run: find . -maxdepth 3 -type d -name node_modules -prune -exec rm -r {} \;
+
+    - name: Collect test reports
+      # Hier kannst du weitere Aktionen hinzufügen, z.B. Upload der Testberichte
+      run: echo "Test reports would be processed here."
+
+    - name: Notify (optional)
+      # Hier kannst du eine Benachrichtigung einbauen, z.B. per E-Mail oder Slack
+      run: echo "Build completed."
