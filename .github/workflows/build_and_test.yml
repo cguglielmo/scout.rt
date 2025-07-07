@@ -10,34 +10,20 @@ name: Java CI with Maven
 
 on:
   push:
-    branches: [ "releases/25.1" ]
+    branches: [ "releases/25.2" ]
   pull_request:
-    branches: [ "releases/25.1" ]
+    branches: [ "releases/25.2" ]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    container: bsisoftware/scout-maven-chrome:mvn-3.9.9-node-22.13.0-java-24
     steps:
     - uses: actions/checkout@v4
-    - name: Run build inside container
-      uses: addnab/docker-run-action@v3
+    - name: Build with Maven
+      run: mvn -f org.eclipse.scout.rt/pom.xml clean verify -U -B -e -Dmaster_enforcerCheck_skip=true -Dmaster_node_dir=${NODE_HOME}/bin -Dscout.excludeTestCategories=org.eclipse.scout.rt.testing.platform.testcategory.ResourceIntensiveTest
+    - name: Publish Test Report
+      uses: mikepenz/action-junit-report@v5
+      if: success() || failure() # always run even if the previous step fails
       with:
-        image: bsisoftware/scout-maven-chrome:mvn-3.9.9-node-22.13.0
-        options: --pull
-        run: |
-          cat <<'EOF'
-          mvn -f org.eclipse.scout.rt/pom.xml clean verify -U -B -e -Dmaster_enforcerCheck_skip=true -Dmaster_node_dir=${NODE_HOME}/bin -Dscout.excludeTestCategories=org.eclipse.scout.rt.testing.platform.testcategory.ResourceIntensiveTest
-          EOF
-
-    - name: Cleanup node_modules directories
-      run: find . -maxdepth 3 -type d -name node_modules -prune -exec rm -r {} \;
-
-    - name: Collect test reports
-      # Hier kannst du weitere Aktionen hinzufügen, z.B. Upload der Testberichte
-      run: echo "Test reports would be processed here."
-
-    - name: Notify (optional)
-      # Hier kannst du eine Benachrichtigung einbauen, z.B. per E-Mail oder Slack
-      run: echo "Build completed."
+        report_paths: '**/target/surefire-reports/TEST-*.xml,**/target/karma-reports/**/test-results.xml'
